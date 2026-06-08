@@ -1,4 +1,31 @@
 require('dotenv').config();
+
+// ============ FORCE RAILWAY ENVIRONMENT VARIABLES ============
+// Map Railway's MySQL variables to the format your code expects
+if (process.env.MYSQLHOST) {
+    console.log('🔵 RUNNING ON RAILWAY - Using Railway MySQL');
+    process.env.DB_HOST = process.env.MYSQLHOST;
+    process.env.DB_USER = process.env.MYSQLUSER;
+    process.env.DB_PASSWORD = process.env.MYSQLPASSWORD;
+    process.env.DB_NAME = process.env.MYSQLDATABASE;
+    process.env.DB_PORT = process.env.MYSQLPORT;
+} else {
+    console.log('🟢 RUNNING LOCALLY - Using local MySQL');
+    // Default local values if not set
+    process.env.DB_HOST = process.env.DB_HOST || 'localhost';
+    process.env.DB_USER = process.env.DB_USER || 'root';
+    process.env.DB_PASSWORD = process.env.DB_PASSWORD || '';
+    process.env.DB_NAME = process.env.DB_NAME || 'task_manager';
+    process.env.DB_PORT = process.env.DB_PORT || '3306';
+}
+
+console.log('📊 Database Connection:', {
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    database: process.env.DB_NAME,
+    port: process.env.DB_PORT
+});
+
 const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
@@ -13,75 +40,56 @@ const path = require('path');
 
 const app = express();
 
-console.log("=== DEBUG: ENV VARIABLES ===");
-console.log("EMAIL_USER:", process.env.EMAIL_USER);
-console.log("EMAIL_HOST:", process.env.EMAIL_HOST);
-console.log("EMAIL_PORT:", process.env.EMAIL_PORT);
-console.log("MYSQLHOST:", process.env.MYSQLHOST);
-console.log("MYSQLUSER:", process.env.MYSQLUSER);
-console.log("MYSQLDATABASE:", process.env.MYSQLDATABASE);
-console.log("============================");
-
-// CORS configuration - Allow both local and production
+// CORS configuration
 app.use(cors({
     origin: ['http://localhost:5173', 'https://*.netlify.app', 'https://taskflow-pro-production-acce.up.railway.app'],
     credentials: true
 }));
 app.use(express.json());
 
-// ============ DATABASE CONNECTION (FIXED FOR RAILWAY) ============
-const dbConfig = {
-    host: process.env.MYSQLHOST || process.env.DB_HOST || 'localhost',
-    user: process.env.MYSQLUSER || process.env.DB_USER || 'root',
-    password: process.env.MYSQLPASSWORD || process.env.DB_PASSWORD || '',
-    database: process.env.MYSQLDATABASE || process.env.DB_NAME || 'task_manager',
-    port: parseInt(process.env.MYSQLPORT || process.env.DB_PORT || '3306'),
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    enableKeepAlive: true,
-    keepAliveInitialDelay: 10000
-};
-
-console.log('📊 Database Config:', {
-    host: dbConfig.host,
-    user: dbConfig.user,
-    database: dbConfig.database,
-    port: dbConfig.port
+// ============ DATABASE CONNECTION ============
+const db = mysql.createConnection({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    port: parseInt(process.env.DB_PORT || '3306')
 });
 
-// Create connection pool
-const pool = mysql.createPool(dbConfig);
-const db = pool.promise();
-
-// Test connection
-async function testDbConnection() {
-    try {
-        const [result] = await db.query('SELECT 1 as connected');
-        console.log('✅ MySQL connected successfully!');
-        return true;
-    } catch (error) {
-        console.error('❌ MySQL connection failed:', error.message);
-        return false;
+db.connect((err) => {
+    if(err) {
+        console.error('❌ DB Connection Failed:', err.message);
+        console.error('Connection details:', {
+            host: process.env.DB_HOST,
+            user: process.env.DB_USER,
+            database: process.env.DB_NAME,
+            port: process.env.DB_PORT
+        });
+        return;
     }
-}
-
-testDbConnection();
+    console.log('✅ Connected to MySQL Database successfully!');
+});
 
 // Health check endpoint
-app.get('/health', async (req, res) => {
-    try {
-        await db.query('SELECT 1');
-        res.json({ status: 'healthy', database: 'connected', timestamp: new Date() });
-    } catch (error) {
-        res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: error.message });
-    }
+app.get('/health', (req, res) => {
+    db.query('SELECT 1', (err, result) => {
+        if(err) {
+            res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
+        } else {
+            res.json({ status: 'healthy', database: 'connected', timestamp: new Date() });
+        }
+    });
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+    res.json({ message: 'TaskFlow Pro API is running', status: 'online' });
 });
 
 // ============ EMAIL CONFIGURATION ============
 const transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: process.env.EMAIL_PORT || 587,
+    port: parseInt(process.env.EMAIL_PORT || '587'),
     secure: false,
     auth: {
         user: process.env.EMAIL_USER,
@@ -158,7 +166,7 @@ const generateVerificationToken = () => {
 };
 
 const sendVerificationEmail = async (email, fullname, token) => {
-    const verificationUrl = `http://localhost:5173/verify-email?token=${token}`;
+    const verificationUrl = `https://taskflow-pro-production-acce.up.railway.app/verify-email?token=${token}`;
     
     const mailOptions = {
         from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
@@ -175,7 +183,7 @@ const sendVerificationEmail = async (email, fullname, token) => {
                     <div style="background: #f0f4f8; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: center;">
                         <a href="${verificationUrl}" style="display: inline-block; padding: 12px 24px; background: #0a2463; color: white; text-decoration: none; border-radius: 5px;">Verify Email</a>
                     </div>
-                    <p>Or copy this link: <a href="${verificationUrl}">${verificationUrl}</a></p>
+                    <p>Or copy this link: ${verificationUrl}</p>
                     <p style="font-size: 12px; color: #666;">This link expires in 24 hours.</p>
                     <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
                     <p style="font-size: 12px; color: #999;">If you didn't create an account, please ignore this email.</p>
@@ -212,7 +220,7 @@ const sendWelcomeEmail = async (email, fullname, uniqueId) => {
                         <p style="font-size: 24px; font-weight: bold; color: #0a2463; margin: 10px 0; letter-spacing: 2px;">${uniqueId}</p>
                         <p style="margin: 0; font-size: 12px; color: #666;">Use this ID to login to your account</p>
                     </div>
-                    <p>Login URL: <a href="http://localhost:5173">http://localhost:5173</a></p>
+                    <p>Login URL: https://taskflow-pro-production-acce.up.railway.app</p>
                     <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
                     <p style="font-size: 12px; color: #999;">TaskFlow Support Team</p>
                 </div>
@@ -468,8 +476,6 @@ app.post("/signup", async (req, res) => {
 app.post("/login", (req, res) => {
     const { unique_id, password } = req.body;
     
-    console.log(`🔐 Login attempt with Unique ID: ${unique_id}`);
-    
     const query = "SELECT * FROM users WHERE unique_id = ? AND password = ?";
     
     db.query(query, [unique_id, password], (err, results) => {
@@ -674,7 +680,7 @@ app.post("/forgot-password", async (req, res) => {
             async (err) => {
                 if (err) return res.status(500).json({ error: err.message });
                 
-                const resetUrl = `http://localhost:5173/reset-password?token=${resetToken}`;
+                const resetUrl = `https://taskflow-pro-production-acce.up.railway.app/reset-password?token=${resetToken}`;
                 
                 const mailOptions = {
                     from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
@@ -692,7 +698,7 @@ app.post("/forgot-password", async (req, res) => {
                                 <div style="background: #f0f4f8; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: center;">
                                     <a href="${resetUrl}" style="display: inline-block; padding: 12px 24px; background: #0a2463; color: white; text-decoration: none; border-radius: 5px;">Reset Password</a>
                                 </div>
-                                <p>Or copy this link: <a href="${resetUrl}">${resetUrl}</a></p>
+                                <p>Or copy this link: ${resetUrl}</p>
                                 <p style="font-size: 12px; color: #666;">This link expires in 1 hour.</p>
                                 <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
                                 <p style="font-size: 12px; color: #999;">If you didn't request this, please ignore this email.</p>
@@ -850,8 +856,6 @@ app.delete("/users/:id", (req, res) => {
     const { adminId } = req.body;
     const userId = req.params.id;
     
-    console.log(`🗑️ DELETE USER - User: ${userId}, Admin: ${adminId}`);
-    
     if (!adminId) {
         return res.status(400).json({ error: "adminId is required" });
     }
@@ -874,23 +878,17 @@ app.delete("/users/:id", (req, res) => {
                 return res.status(400).json({ error: "You cannot delete your own account" });
             }
             
-            console.log(`📋 Deleting: ${deletedUser.fullname} (${deletedUser.unique_id})`);
-            
             db.query("DELETE FROM notice_recipients WHERE user_id = ?", [userId], (err) => {
                 if (err) return res.status(500).json({ error: err.message });
-                console.log(`✅ Deleted notice_recipients`);
                 
                 db.query("DELETE FROM tasks WHERE created_by = ?", [userId], (err) => {
                     if (err) return res.status(500).json({ error: err.message });
-                    console.log(`✅ Deleted tasks`);
                     
                     db.query("UPDATE notices SET created_by = NULL WHERE created_by = ?", [userId], (err) => {
                         if (err) console.log("⚠️ Notice update warning:", err.message);
                         
                         db.query("DELETE FROM users WHERE id = ?", [userId], async (err) => {
                             if (err) return res.status(500).json({ error: err.message });
-                            
-                            console.log(`✅ User ${deletedUser.fullname} deleted successfully`);
                             
                             if (deletedUser.email) {
                                 await sendAccountTerminationEmail(deletedUser.email, deletedUser.fullname, adminName);
@@ -1007,8 +1005,6 @@ app.put("/tasks/:id/status", async (req, res) => {
     const { status, progress } = req.body;
     const taskId = req.params.id;
     
-    console.log(`🔄 Updating task ${taskId} - Status: ${status}, Progress: ${progress}`);
-    
     db.query("SELECT * FROM tasks WHERE id = ?", [taskId], async (err, oldTaskResult) => {
         if(err) return res.status(500).json({ error: err.message });
         const oldTask = oldTaskResult[0];
@@ -1020,7 +1016,6 @@ app.put("/tasks/:id/status", async (req, res) => {
         if (progress !== undefined && progress !== null) {
             query += ", progress = ?";
             params.push(progress);
-            console.log(`📊 Progress updated to: ${progress}%`);
         }
         
         if (status === 'completed' && oldTask.status !== 'completed') {
@@ -1054,7 +1049,6 @@ app.put("/tasks/:id/status", async (req, res) => {
                 }
             }
             
-            console.log(`✅ Task ${taskId} updated - Status: ${status}, Progress: ${progress || oldTask.progress}`);
             res.json({ message: "Task status updated", taskId: taskId, newStatus: status, progress: progress });
         });
     });
@@ -1187,432 +1181,6 @@ app.delete("/notices/:id", (req, res) => {
     });
 });
 
-// ============ AUTOMATED DAILY REPORT ============
-
-const getTasksAssignedByAdmin = async (adminId) => {
-    return new Promise((resolve, reject) => {
-        const query = `
-            SELECT 
-                t.*, 
-                u.fullname as assigned_to_name,
-                u.unique_id as assigned_to_unique_id,
-                CASE 
-                    WHEN t.status = 'completed' THEN '✅ Completed'
-                    WHEN t.status = 'inprogress' THEN '🔄 In Progress'
-                    ELSE '⏳ Pending'
-                END as status_display,
-                CASE 
-                    WHEN t.priority = 'HIGH' THEN '🔴 High'
-                    WHEN t.priority = 'MEDIUM' THEN '🟡 Medium'
-                    ELSE '🟢 Low'
-                END as priority_display
-            FROM tasks t
-            JOIN users u ON t.created_by = u.id
-            WHERE t.assigned_by = ? AND t.created_by != ?
-            ORDER BY t.status, t.deadline ASC
-        `;
-        
-        db.query(query, [adminId, adminId], (err, tasks) => {
-            if(err) return reject(err);
-            
-            const stats = {
-                total: tasks.length,
-                completed: tasks.filter(t => t.status === 'completed').length,
-                inProgress: tasks.filter(t => t.status === 'inprogress').length,
-                pending: tasks.filter(t => t.status === 'pending').length,
-                completionRate: tasks.length > 0 ? Math.round((tasks.filter(t => t.status === 'completed').length / tasks.length) * 100) : 0
-            };
-            
-            const completedToday = tasks.filter(t => {
-                if (!t.completed_at) return false;
-                const completedDate = new Date(t.completed_at).toDateString();
-                const today = new Date().toDateString();
-                return completedDate === today && t.status === 'completed';
-            });
-            
-            resolve({ tasks, stats, completedToday });
-        });
-    });
-};
-
-const generateExcelReport = async (adminId, tasks, stats) => {
-    const workbook = XLSX.utils.book_new();
-    
-    const summaryData = [
-        ['TaskFlow Pro - Daily Task Report'],
-        [`Admin: ${adminId}`],
-        [`Date: ${new Date().toLocaleDateString()}`],
-        [],
-        ['STATISTICS SUMMARY'],
-        ['Total Assigned', stats.total],
-        ['Completed', stats.completed],
-        ['In Progress', stats.inProgress],
-        ['Pending', stats.pending],
-        ['Completion Rate', `${stats.completionRate}%`],
-        [],
-        ['TASKS ASSIGNED BY YOU'],
-        ['Status', 'Task Title', 'Priority', 'Assigned To', 'Progress', 'Deadline']
-    ];
-    
-    tasks.forEach(task => {
-        summaryData.push([
-            task.status === 'completed' ? 'Completed' : task.status === 'inprogress' ? 'In Progress' : 'Pending',
-            task.title,
-            task.priority,
-            task.assigned_to_name,
-            `${task.progress || 0}%`,
-            task.deadline ? new Date(task.deadline).toLocaleDateString() : 'No deadline'
-        ]);
-    });
-    
-    const completedToday = tasks.filter(t => {
-        if (!t.completed_at) return false;
-        const completedDate = new Date(t.completed_at).toDateString();
-        const today = new Date().toDateString();
-        return completedDate === today && t.status === 'completed';
-    });
-    
-    if (completedToday.length > 0) {
-        summaryData.push([], ['TASKS COMPLETED TODAY']);
-        summaryData.push(['User', 'Task', 'Completed At']);
-        completedToday.forEach(task => {
-            summaryData.push([
-                task.assigned_to_name,
-                task.title,
-                new Date(task.completed_at).toLocaleString()
-            ]);
-        });
-    }
-    
-    const worksheet = XLSX.utils.aoa_to_sheet(summaryData);
-    
-    worksheet['!cols'] = [
-        { wch: 12 }, { wch: 30 }, { wch: 10 }, { wch: 20 }, { wch: 10 }, { wch: 15 }
-    ];
-    
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Daily Report');
-    
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-    return buffer;
-};
-
-const sendAdminReport = async (admin) => {
-    try {
-        const { tasks, stats, completedToday } = await getTasksAssignedByAdmin(admin.id);
-        
-        if (tasks.length === 0) {
-            console.log(`📭 No tasks assigned by ${admin.fullname}, skipping email`);
-            return;
-        }
-        
-        const excelBuffer = await generateExcelReport(admin.id, tasks, stats);
-        
-        const tasksHtml = tasks.map(task => `
-            <tr style="border-bottom: 1px solid #e0e0e0;">
-                <td style="padding: 8px; white-space: nowrap;">${task.status_display}</td>
-                <td style="padding: 8px;"><strong>${task.title}</strong></td>
-                <td style="padding: 8px; white-space: nowrap;">${task.priority_display}</td>
-                <td style="padding: 8px; white-space: nowrap;">${task.assigned_to_name}<br/><span style="font-size: 10px; color: #666;">${task.assigned_to_unique_id}</span></td>
-                <td style="padding: 8px; white-space: nowrap;">${task.progress || 0}%</td>
-                <td style="padding: 8px; white-space: nowrap;">${task.deadline ? new Date(task.deadline).toLocaleDateString() : 'No deadline'}</td>
-            </tr>
-        `).join('');
-        
-        const completedTodayHtml = completedToday.map(task => `
-            <li style="padding: 5px 0;">
-                ✅ <strong>${task.assigned_to_name}</strong> completed 
-                <strong>"${task.title}"</strong> at ${new Date(task.completed_at).toLocaleTimeString()}
-            </li>
-        `).join('');
-        
-        const mailOptions = {
-            from: `"TaskFlow Automated Reports" <${process.env.EMAIL_USER}>`,
-            to: admin.email,
-            subject: `📊 Daily Task Report - Tasks You Assigned (${new Date().toLocaleDateString()})`,
-            attachments: [
-                {
-                    filename: `TaskFlow_Report_${new Date().toISOString().split('T')[0]}.xlsx`,
-                    content: excelBuffer,
-                    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                }
-            ],
-            html: `
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <style>
-                        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: #333; margin: 0; padding: 0; background: #f5f5f5; }
-                        .container { max-width: 100%; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-                        .header { background: linear-gradient(135deg, #0a2463, #1e3a5f); color: white; padding: 20px; text-align: center; }
-                        .header h1 { margin: 0; font-size: 22px; }
-                        .header p { margin: 5px 0 0; opacity: 0.9; font-size: 14px; }
-                        .content { padding: 20px; }
-                        .greeting { font-size: 16px; margin-bottom: 20px; }
-                        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 20px 0; }
-                        .stat-card { background: #f0f4f8; padding: 12px; border-radius: 10px; text-align: center; }
-                        .stat-number { font-size: 24px; font-weight: bold; color: #0a2463; }
-                        .stat-label { font-size: 11px; color: #666; margin-top: 4px; }
-                        .progress-container { background: #e0e0e0; border-radius: 10px; height: 20px; margin: 20px 0; overflow: hidden; }
-                        .progress-fill { background: #0a2463; height: 20px; border-radius: 10px; width: ${stats.completionRate}%; text-align: center; color: white; font-size: 11px; line-height: 20px; }
-                        .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 20px 0; }
-                        .task-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 700px; }
-                        .task-table th { background: #0a2463; color: white; padding: 10px 8px; text-align: left; font-size: 11px; }
-                        .task-table td { padding: 8px; border-bottom: 1px solid #e0e0e0; }
-                        .completed-list { background: #e8f5e9; padding: 12px; border-radius: 10px; margin: 20px 0; }
-                        .excel-note { background: #fff3e0; padding: 10px; border-radius: 8px; margin: 15px 0; font-size: 12px; text-align: center; }
-                        .footer { background: #f8f9fc; padding: 12px; text-align: center; font-size: 11px; color: #666; border-top: 1px solid #e0e0e0; }
-                        @media (max-width: 480px) {
-                            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-                            .stat-number { font-size: 20px; }
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="header">
-                            <h1>📊 TaskFlow Daily Report</h1>
-                            <p>Tasks You Assigned - ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
-                        </div>
-                        <div class="content">
-                            <div class="greeting">Hello <strong>${admin.fullname}</strong> (${admin.unique_id}),</div>
-                            <p>Here's your daily summary of tasks you've assigned to team members.</p>
-                            
-                            <div class="stats-grid">
-                                <div class="stat-card"><div class="stat-number">${stats.total}</div><div class="stat-label">Total Assigned</div></div>
-                                <div class="stat-card"><div class="stat-number">${stats.completed}</div><div class="stat-label">Completed</div></div>
-                                <div class="stat-card"><div class="stat-number">${stats.inProgress}</div><div class="stat-label">In Progress</div></div>
-                                <div class="stat-card"><div class="stat-number">${stats.pending}</div><div class="stat-label">Pending</div></div>
-                            </div>
-                            
-                            <div class="progress-container">
-                                <div class="progress-fill">${stats.completionRate}% Complete</div>
-                            </div>
-                            
-                            ${completedToday.length > 0 ? `
-                            <div class="completed-list">
-                                <h3>✅ Tasks Completed Today (${completedToday.length})</h3>
-                                <ul style="margin: 10px 0 0 20px; padding-left: 20px;">${completedTodayHtml}</ul>
-                            </div>
-                            ` : '<div style="background: #fff3e0; padding: 10px; border-radius: 8px; margin: 15px 0;">📭 No tasks were completed today.</div>'}
-                            
-                            <div class="excel-note">
-                                📎 <strong>Excel attachment included!</strong> You'll find an Excel file attached to this email with all your task data.
-                            </div>
-                            
-                            <h3>📋 All Tasks You've Assigned (${stats.total})</h3>
-                            <div class="table-responsive">
-                                <table class="task-table">
-                                    <thead><tr><th>Status</th><th>Task</th><th>Priority</th><th>Assigned To</th><th>Progress</th><th>Deadline</th></tr></thead>
-                                    <tbody>${tasksHtml}</tbody>
-                                自觉
-                            </div>
-                        </div>
-                        <div class="footer">
-                            &copy; 2026 TaskFlow Pro | Automated Daily Report | ${new Date().toLocaleString()}
-                        </div>
-                    </div>
-                </body>
-                </html>
-            `
-        };
-        
-        await transporter.sendMail(mailOptions);
-        console.log(`✅ Daily report sent to ${admin.email} (${stats.total} tasks assigned, ${stats.completed} completed)`);
-        return { sent: true, tasksCount: stats.total };
-    } catch (err) {
-        console.error(`❌ Failed to send report to ${admin.email}:`, err.message);
-        return { sent: false, error: err.message };
-    }
-};
-
-const sendDailyReportsToAllAdmins = async () => {
-    console.log(`⏰ [${new Date().toLocaleString()}] Running automated daily report job...`);
-    
-    db.query("SELECT id, unique_id, fullname, email, role FROM users WHERE role = 'admin'", async (err, admins) => {
-        if (err) {
-            console.error("❌ Failed to fetch admins:", err);
-            return;
-        }
-        
-        if (admins.length === 0) {
-            console.log("📭 No admins found to send reports");
-            return;
-        }
-        
-        console.log(`📧 Sending daily reports to ${admins.length} admin(s)...`);
-        
-        let sentCount = 0;
-        let skipCount = 0;
-        let errorCount = 0;
-        
-        for (const admin of admins) {
-            const result = await sendAdminReport(admin);
-            if (result.sent) sentCount++;
-            else if (result.reason === 'no_tasks') skipCount++;
-            else errorCount++;
-            
-            await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-        
-        console.log(`✅ Daily reports completed: ${sentCount} sent, ${skipCount} skipped (no tasks), ${errorCount} failed`);
-    });
-};
-
-app.post("/api/trigger-daily-reports", async (req, res) => {
-    const { adminId } = req.body;
-    
-    db.query("SELECT role FROM users WHERE id = ?", [adminId], async (err, results) => {
-        if(err) return res.status(500).json({ error: err.message });
-        if(results.length === 0 || results[0].role !== 'admin') {
-            return res.status(403).json({ error: "Unauthorized - Admin only" });
-        }
-        
-        sendDailyReportsToAllAdmins().catch(console.error);
-        res.json({ 
-            message: "Daily reports triggered successfully! Check server console for progress.",
-            timestamp: new Date().toISOString()
-        });
-    });
-});
-
-cron.schedule('0 18 * * *', async () => {
-    console.log(`📅 [${new Date().toLocaleString()}] CRON: Running scheduled daily reports`);
-    await sendDailyReportsToAllAdmins();
-}, {
-    timezone: "Asia/Kolkata"
-});
-
-console.log("📅 Automated Daily Report Scheduler initialized");
-console.log("   ✅ Reports run at 6:00 PM daily (IST)");
-console.log("   ✅ Each admin receives ONLY tasks they assigned");
-console.log("   ✅ Excel attachment included with every report");
-
-// ============ REPORT GENERATION FOR FRONTEND ============
-
-const getDailyDigestData = async () => {
-    return new Promise((resolve, reject) => {
-        const completedTodayQuery = `
-            SELECT t.*, u.fullname, u.unique_id, a.fullname as assigned_by_name
-            FROM tasks t
-            JOIN users u ON t.created_by = u.id
-            LEFT JOIN users a ON t.assigned_by = a.id
-            WHERE DATE(t.completed_at) = CURDATE() AND t.status = 'completed'
-            ORDER BY t.completed_at DESC
-        `;
-        
-        const statsQuery = `
-            SELECT 
-                COUNT(*) as total,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-                SUM(CASE WHEN status = 'inprogress' THEN 1 ELSE 0 END) as in_progress,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                ROUND(AVG(progress), 1) as avg_progress
-            FROM tasks
-        `;
-        
-        db.query(completedTodayQuery, (err, completedTasks) => {
-            if(err) return reject(err);
-            
-            db.query(statsQuery, (err, stats) => {
-                if(err) return reject(err);
-                resolve({
-                    date: new Date(),
-                    completedTasks: completedTasks,
-                    summary: {
-                        total: stats[0]?.total || 0,
-                        completed: stats[0]?.completed || 0,
-                        inProgress: stats[0]?.in_progress || 0,
-                        pending: stats[0]?.pending || 0,
-                        avgProgress: stats[0]?.avg_progress || 0,
-                        completionRate: stats[0]?.total > 0 ? Math.round((stats[0].completed / stats[0].total) * 100) : 0
-                    }
-                });
-            });
-        });
-    });
-};
-
-const generateWordReport = async () => {
-    const digestData = await getDailyDigestData();
-    
-    const doc = new Document({
-        sections: [{
-            properties: {},
-            children: [
-                new Paragraph({ text: "TaskFlow Pro - Daily Task Report", heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
-                new Paragraph({ text: format(digestData.date, 'EEEE, MMMM dd, yyyy'), alignment: AlignmentType.CENTER, spacing: { after: 200 } }),
-                new Paragraph({ text: "Executive Summary", heading: HeadingLevel.HEADING_1, spacing: { before: 200 } }),
-                new Paragraph({
-                    children: [
-                        new TextRun(`Total Tasks: ${digestData.summary.total}`),
-                        new TextRun({ text: `\nCompleted: ${digestData.summary.completed}`, break: 1 }),
-                        new TextRun({ text: `\nIn Progress: ${digestData.summary.inProgress}`, break: 1 }),
-                        new TextRun({ text: `\nPending: ${digestData.summary.pending}`, break: 1 }),
-                        new TextRun({ text: `\nCompletion Rate: ${digestData.summary.completionRate}%`, break: 1 }),
-                        new TextRun({ text: `\nAverage Progress: ${digestData.summary.avgProgress}%`, break: 1 }),
-                    ],
-                }),
-                new Paragraph({ text: "Tasks Completed Today", heading: HeadingLevel.HEADING_1, spacing: { before: 200 } }),
-                new Table({
-                    width: { size: 100, type: WidthType.PERCENTAGE },
-                    rows: [
-                        new TableRow({
-                            children: [
-                                new TableCell({ children: [new Paragraph({ text: "Status" })], width: { size: 10, type: WidthType.PERCENTAGE } }),
-                                new TableCell({ children: [new Paragraph({ text: "User" })], width: { size: 20, type: WidthType.PERCENTAGE } }),
-                                new TableCell({ children: [new Paragraph({ text: "Task" })], width: { size: 40, type: WidthType.PERCENTAGE } }),
-                                new TableCell({ children: [new Paragraph({ text: "Assigned By" })], width: { size: 20, type: WidthType.PERCENTAGE } }),
-                                new TableCell({ children: [new Paragraph({ text: "Time" })], width: { size: 10, type: WidthType.PERCENTAGE } }),
-                            ],
-                        }),
-                        ...digestData.completedTasks.map(task => new TableRow({
-                            children: [
-                                new TableCell({ children: [new Paragraph({ text: "✅" })] }),
-                                new TableCell({ children: [new Paragraph({ text: task.fullname })] }),
-                                new TableCell({ children: [new Paragraph({ text: task.title })] }),
-                                new TableCell({ children: [new Paragraph({ text: task.assigned_by_name || 'Self' })] }),
-                                new TableCell({ children: [new Paragraph({ text: new Date(task.completed_at).toLocaleTimeString() })] }),
-                            ],
-                        })),
-                    ],
-                }),
-                new Paragraph({ text: "Generated by TaskFlow Pro", alignment: AlignmentType.CENTER, spacing: { before: 300 } }),
-            ],
-        }],
-    });
-    
-    const buffer = await Packer.toBuffer(doc);
-    const filePath = path.join(__dirname, `daily_report_${format(new Date(), 'yyyy-MM-dd')}.docx`);
-    fs.writeFileSync(filePath, buffer);
-    return filePath;
-};
-
-app.get("/download-report", async (req, res) => {
-    try {
-        const filePath = await generateWordReport();
-        res.download(filePath, `TaskFlow_Report_${format(new Date(), 'yyyy-MM-dd')}.docx`, (err) => {
-            if (err) {
-                console.error("Download error:", err);
-                res.status(500).json({ error: "Failed to download report" });
-            }
-            try { fs.unlinkSync(filePath); } catch(e) {}
-        });
-    } catch (err) {
-        console.error("Report generation error:", err);
-        res.status(500).json({ error: "Failed to generate report" });
-    }
-});
-
-app.get("/api/report", async (req, res) => {
-    try {
-        const digestData = await getDailyDigestData();
-        res.json(digestData);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
 // ============ TASK COMMENTS & NOTIFICATIONS APIs ============
 
 app.get("/tasks/:taskId/comments", (req, res) => {
@@ -1710,6 +1278,15 @@ app.post("/tasks/:taskId/comments", async (req, res) => {
                                 if (err || !commenterResult[0]) return;
                                 
                                 const commenter = commenterResult[0];
+                                const sendMentionEmail = async (email, fullname, mentionedBy, taskTitle, comment, taskId) => {
+                                    const mailOptions = {
+                                        from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
+                                        to: email,
+                                        subject: `📢 You were mentioned in a task - ${taskTitle}`,
+                                        html: `<p>${mentionedBy} mentioned you: "${comment}"</p>`
+                                    };
+                                    try { await transporter.sendMail(mailOptions); } catch(e) {}
+                                };
                                 sendMentionEmail(mentionedUser.email, mentionedUser.fullname, commenter.fullname, task.title, comment, taskId);
                             });
                         }
@@ -1821,155 +1398,6 @@ app.put("/notifications/read-all", (req, res) => {
     });
 });
 
-const sendMentionEmail = async (email, fullname, mentionedBy, taskTitle, comment, taskId) => {
-    const mailOptions = {
-        from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: `📢 You were mentioned in a task - ${taskTitle}`,
-        html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-                <div style="text-align: center; background: #0a2463; padding: 20px; border-radius: 10px 10px 0 0;">
-                    <h1 style="color: white; margin: 0;">TaskFlow Pro</h1>
-                </div>
-                <div style="padding: 20px;">
-                    <h2>You were mentioned! 🗣️</h2>
-                    <p>Hello ${fullname},</p>
-                    <p><strong>${mentionedBy}</strong> mentioned you in a comment on task:</p>
-                    <div style="background: #f0f4f8; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                        <p style="font-size: 16px; font-weight: bold; color: #0a2463;">${taskTitle}</p>
-                        <p style="color: #333;"><strong>Comment:</strong> "${comment.substring(0, 200)}"</p>
-                    </div>
-                    <p><a href="http://localhost:5173" style="display: inline-block; padding: 10px 20px; background: #0a2463; color: white; text-decoration: none; border-radius: 5px;">View Task</a></p>
-                    <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
-                    <p style="font-size: 12px; color: #999;">TaskFlow Support Team</p>
-                </div>
-            </div>
-        `
-    };
-    
-    try {
-        await transporter.sendMail(mailOptions);
-        console.log(`📧 Mention email sent to ${email}`);
-    } catch (err) {
-        console.error("❌ Mention email failed:", err);
-    }
-};
-
-// ============ TEAM EMAIL NOTIFICATIONS ============
-
-const sendTeamAddedEmail = async (email, fullname, teamName, adminName) => {
-    const mailOptions = {
-        from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: `👥 You've been added to a team - ${teamName}`,
-        html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-                <div style="text-align: center; background: #0a2463; padding: 20px; border-radius: 10px 10px 0 0;">
-                    <h1 style="color: white; margin: 0;">TaskFlow Pro</h1>
-                </div>
-                <div style="padding: 20px;">
-                    <h2>You've been added to a team! 🎉</h2>
-                    <p>Hello ${fullname},</p>
-                    <p><strong>${adminName}</strong> has added you to the team:</p>
-                    <div style="background: #f0f4f8; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                        <p style="font-size: 18px; font-weight: bold; color: #0a2463;">🏆 ${teamName}</p>
-                    </div>
-                    <p>You can now:</p>
-                    <ul>
-                        <li>View team tasks in your sidebar</li>
-                        <li>Collaborate with team members</li>
-                        <li>Comment on team discussions</li>
-                    </ul>
-                    <p><a href="http://localhost:5173" style="display: inline-block; padding: 10px 20px; background: #0a2463; color: white; text-decoration: none; border-radius: 5px;">Go to Dashboard</a></p>
-                    <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
-                    <p style="font-size: 12px; color: #999;">TaskFlow Support Team</p>
-                </div>
-            </div>
-        `
-    };
-    
-    try {
-        await transporter.sendMail(mailOptions);
-        console.log(`📧 Team added email sent to ${email}`);
-        return true;
-    } catch (err) {
-        console.error("❌ Team added email failed:", err);
-        return false;
-    }
-};
-
-const sendTeamTaskAssignedEmail = async (email, fullname, teamName, taskTitle, priority, deadline, adminName) => {
-    const mailOptions = {
-        from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: `📋 New Task Assigned to ${teamName} - ${taskTitle}`,
-        html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-                <div style="text-align: center; background: #0a2463; padding: 20px; border-radius: 10px 10px 0 0;">
-                    <h1 style="color: white; margin: 0;">TaskFlow Pro</h1>
-                </div>
-                <div style="padding: 20px;">
-                    <h2>New Task Assigned to Your Team! 📋</h2>
-                    <p>Hello ${fullname},</p>
-                    <p><strong>${adminName}</strong> has assigned a new task to your team <strong>${teamName}</strong>:</p>
-                    <div style="background: #f0f4f8; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                        <p style="font-size: 16px; font-weight: bold; color: #0a2463;">${taskTitle}</p>
-                        <p><strong>Priority:</strong> ${priority}</p>
-                        <p><strong>Due Date:</strong> ${deadline || 'Not specified'}</p>
-                    </div>
-                    <p><a href="http://localhost:5173" style="display: inline-block; padding: 10px 20px; background: #0a2463; color: white; text-decoration: none; border-radius: 5px;">View Task</a></p>
-                    <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
-                    <p style="font-size: 12px; color: #999;">TaskFlow Support Team</p>
-                </div>
-            </div>
-        `
-    };
-    
-    try {
-        await transporter.sendMail(mailOptions);
-        console.log(`📧 Team task assigned email sent to ${email}`);
-        return true;
-    } catch (err) {
-        console.error("❌ Team task assigned email failed:", err);
-        return false;
-    }
-};
-
-const sendTeamCommentEmail = async (email, fullname, teamName, taskTitle, comment, commenterName) => {
-    const mailOptions = {
-        from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: `💬 New comment in ${teamName} - ${taskTitle}`,
-        html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-                <div style="text-align: center; background: #0a2463; padding: 20px; border-radius: 10px 10px 0 0;">
-                    <h1 style="color: white; margin: 0;">TaskFlow Pro</h1>
-                </div>
-                <div style="padding: 20px;">
-                    <h2>New Comment in Your Team 💬</h2>
-                    <p>Hello ${fullname},</p>
-                    <p><strong>${commenterName}</strong> commented on task <strong>${taskTitle}</strong> in team <strong>${teamName}</strong>:</p>
-                    <div style="background: #f0f4f8; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                        <p style="color: #333;">"${comment.substring(0, 200)}"</p>
-                    </div>
-                    <p><a href="http://localhost:5173" style="display: inline-block; padding: 10px 20px; background: #0a2463; color: white; text-decoration: none; border-radius: 5px;">View Discussion</a></p>
-                    <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
-                    <p style="font-size: 12px; color: #999;">TaskFlow Support Team</p>
-                </div>
-            </div>
-        `
-    };
-    
-    try {
-        await transporter.sendMail(mailOptions);
-        console.log(`📧 Team comment email sent to ${email}`);
-        return true;
-    } catch (err) {
-        console.error("❌ Team comment email failed:", err);
-        return false;
-    }
-};
-
 // ============ TEAM APIs ============
 
 app.post("/teams", async (req, res) => {
@@ -2009,6 +1437,15 @@ app.post("/teams", async (req, res) => {
                                     for (const userId of memberIds) {
                                         db.query("SELECT email, fullname FROM users WHERE id = ?", [userId], async (err, userResult) => {
                                             if (!err && userResult.length > 0) {
+                                                const sendTeamAddedEmail = async (email, fullname, teamName, adminName) => {
+                                                    const mailOptions = {
+                                                        from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
+                                                        to: email,
+                                                        subject: `👥 You've been added to a team - ${teamName}`,
+                                                        html: `<p>You've been added to ${teamName} by ${adminName}</p>`
+                                                    };
+                                                    try { await transporter.sendMail(mailOptions); } catch(e) {}
+                                                };
                                                 await sendTeamAddedEmail(userResult[0].email, userResult[0].fullname, name, adminName);
                                             }
                                         });
@@ -2168,6 +1605,15 @@ app.post("/teams/:teamId/members", async (req, res) => {
                     
                     db.query("SELECT email, fullname FROM users WHERE id = ?", [userId], async (err, userResult) => {
                         if (!err && userResult.length > 0) {
+                            const sendTeamAddedEmail = async (email, fullname, teamName, adminName) => {
+                                const mailOptions = {
+                                    from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
+                                    to: email,
+                                    subject: `👥 You've been added to a team - ${teamName}`,
+                                    html: `<p>You've been added to ${teamName} by ${adminName}</p>`
+                                };
+                                try { await transporter.sendMail(mailOptions); } catch(e) {}
+                            };
                             await sendTeamAddedEmail(userResult[0].email, userResult[0].fullname, teamName, adminName);
                         }
                     });
@@ -2222,19 +1668,7 @@ app.post("/teams/:teamId/tasks", async (req, res) => {
         const isAdmin = userResult && userResult[0]?.role === 'admin';
         const userName = userResult[0]?.fullname || 'Administrator';
         
-        if (!isAdmin) {
-            db.query("SELECT role FROM team_members WHERE team_id = ? AND user_id = ?", [teamId, adminId], (err, teamResult) => {
-                if (err) return res.status(500).json({ error: err.message });
-                if (teamResult.length === 0 || teamResult[0].role !== 'lead') {
-                    return res.status(403).json({ error: "Unauthorized: Only admin or team lead can create team tasks" });
-                }
-                proceed();
-            });
-        } else {
-            proceed();
-        }
-        
-        function proceed() {
+        const proceed = () => {
             const query = `INSERT INTO tasks 
                 (title, description, priority, deadline, status, created_by, assigned_by, assigned_at, progress, team_id) 
                 VALUES (?, ?, ?, ?, 'pending', ?, ?, NOW(), 0, ?)`;
@@ -2253,6 +1687,15 @@ app.post("/teams/:teamId/tasks", async (req, res) => {
                             
                             for (const member of members) {
                                 if (member.email) {
+                                    const sendTeamTaskAssignedEmail = async (email, fullname, teamName, taskTitle, priority, deadline, adminName) => {
+                                        const mailOptions = {
+                                            from: `"TaskFlow Support" <${process.env.EMAIL_USER}>`,
+                                            to: email,
+                                            subject: `📋 New Task Assigned to ${teamName} - ${taskTitle}`,
+                                            html: `<p>New task: ${taskTitle} assigned to your team</p>`
+                                        };
+                                        try { await transporter.sendMail(mailOptions); } catch(e) {}
+                                    };
                                     await sendTeamTaskAssignedEmail(member.email, member.fullname, teamName, title, priority, deadline || 'Not specified', userName);
                                 }
                             }
@@ -2261,6 +1704,18 @@ app.post("/teams/:teamId/tasks", async (req, res) => {
                 
                 res.json({ message: "Team task created", taskId: result.insertId });
             });
+        };
+        
+        if (!isAdmin) {
+            db.query("SELECT role FROM team_members WHERE team_id = ? AND user_id = ?", [teamId, adminId], (err, teamResult) => {
+                if (err) return res.status(500).json({ error: err.message });
+                if (teamResult.length === 0 || teamResult[0].role !== 'lead') {
+                    return res.status(403).json({ error: "Unauthorized: Only admin or team lead can create team tasks" });
+                }
+                proceed();
+            });
+        } else {
+            proceed();
         }
     });
 });
