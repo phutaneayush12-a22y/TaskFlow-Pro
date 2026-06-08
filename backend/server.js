@@ -17,29 +17,65 @@ console.log("=== DEBUG: ENV VARIABLES ===");
 console.log("EMAIL_USER:", process.env.EMAIL_USER);
 console.log("EMAIL_HOST:", process.env.EMAIL_HOST);
 console.log("EMAIL_PORT:", process.env.EMAIL_PORT);
+console.log("MYSQLHOST:", process.env.MYSQLHOST);
+console.log("MYSQLUSER:", process.env.MYSQLUSER);
+console.log("MYSQLDATABASE:", process.env.MYSQLDATABASE);
 console.log("============================");
 
-// CORS configuration
+// CORS configuration - Allow both local and production
 app.use(cors({
-    origin: 'http://localhost:5173',
+    origin: ['http://localhost:5173', 'https://*.netlify.app', 'https://taskflow-pro-production-acce.up.railway.app'],
     credentials: true
 }));
 app.use(express.json());
 
-// Database connection
-const db = mysql.createConnection({
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'task_manager'
+// ============ DATABASE CONNECTION (FIXED FOR RAILWAY) ============
+const dbConfig = {
+    host: process.env.MYSQLHOST || process.env.DB_HOST || 'localhost',
+    user: process.env.MYSQLUSER || process.env.DB_USER || 'root',
+    password: process.env.MYSQLPASSWORD || process.env.DB_PASSWORD || '',
+    database: process.env.MYSQLDATABASE || process.env.DB_NAME || 'task_manager',
+    port: parseInt(process.env.MYSQLPORT || process.env.DB_PORT || '3306'),
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000
+};
+
+console.log('📊 Database Config:', {
+    host: dbConfig.host,
+    user: dbConfig.user,
+    database: dbConfig.database,
+    port: dbConfig.port
 });
 
-db.connect((err) => {
-    if(err) {
-        console.log('❌ DB Connection Failed:', err);
-        return;
+// Create connection pool
+const pool = mysql.createPool(dbConfig);
+const db = pool.promise();
+
+// Test connection
+async function testDbConnection() {
+    try {
+        const [result] = await db.query('SELECT 1 as connected');
+        console.log('✅ MySQL connected successfully!');
+        return true;
+    } catch (error) {
+        console.error('❌ MySQL connection failed:', error.message);
+        return false;
     }
-    console.log('✅ Connected to MySQL Database!');
+}
+
+testDbConnection();
+
+// Health check endpoint
+app.get('/health', async (req, res) => {
+    try {
+        await db.query('SELECT 1');
+        res.json({ status: 'healthy', database: 'connected', timestamp: new Date() });
+    } catch (error) {
+        res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: error.message });
+    }
 });
 
 // ============ EMAIL CONFIGURATION ============
@@ -176,7 +212,7 @@ const sendWelcomeEmail = async (email, fullname, uniqueId) => {
                         <p style="font-size: 24px; font-weight: bold; color: #0a2463; margin: 10px 0; letter-spacing: 2px;">${uniqueId}</p>
                         <p style="margin: 0; font-size: 12px; color: #666;">Use this ID to login to your account</p>
                     </div>
-                    <p>Login URL: <a href="http://localhost:5173" style="color: #0a2463;">http://localhost:5173</a></p>
+                    <p>Login URL: <a href="http://localhost:5173">http://localhost:5173</a></p>
                     <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
                     <p style="font-size: 12px; color: #999;">TaskFlow Support Team</p>
                 </div>
@@ -1369,7 +1405,7 @@ const sendAdminReport = async (admin) => {
                                 <table class="task-table">
                                     <thead><tr><th>Status</th><th>Task</th><th>Priority</th><th>Assigned To</th><th>Progress</th><th>Deadline</th></tr></thead>
                                     <tbody>${tasksHtml}</tbody>
-                                </table>
+                                自觉
                             </div>
                         </div>
                         <div class="footer">
@@ -2230,6 +2266,9 @@ app.post("/teams/:teamId/tasks", async (req, res) => {
 });
 
 // ============ START SERVER ============
-app.listen(5000, () => {
-    console.log('🚀 Server running on http://localhost:5000');
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📍 Health check: https://taskflow-pro-production-acce.up.railway.app/health`);
+    console.log(`📋 Tasks endpoint: https://taskflow-pro-production-acce.up.railway.app/tasks`);
 });
